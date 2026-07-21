@@ -1,0 +1,5 @@
+Random_string =input("Enter a random word: ")
+print("reversing")
+print("----------------")
+print(f"{Random_string} reversed is ;")
+print (Random_string [::-1] )
