@@ -1,0 +1,11 @@
+Name = input("what is your name: ")
+Age = int(input("Enter your age: "))
+Favorite_Language = input("What's your favorite programmung language: ")
+
+print("========================")
+print("PERSONAL INFO CARD")
+print("========================")
+print(f" Name: {Name}")
+print(f" Age: {Age}")
+print(f" Favorite Language: {Favorite_Language}")
+print("========================")
