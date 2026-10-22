@@ -1,0 +1,110 @@
+
+import pandas as pd
+import numpy as np
+from sklearn.datasets import  load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+data = load_breast_cancer()
+X,y = data.data,data.target
+X_train, X_test, y_train, y_test =train_test_split(X,y, test_size = 0.2, random_state = 42,stratify=y )
+
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.base import BaseEstimator, TransformerMixin
+import joblib 
+
+
+def add_roundness(X):
+    df = pd.DataFrame(X, columns = data.feature_names)
+    df['roundness'] = (df['mean perimeter']**2)/df['mean area']
+    return df.values
+
+
+cv = StratifiedKFold(5,shuffle=True,random_state=42)
+
+pipeline = Pipeline([('features', FunctionTransformer(add_roundness)),
+                     ('scaler', StandardScaler()),
+                     ('model', LogisticRegression(max_iter=1000))
+                     ])
+scores = cross_val_score(pipeline,X,y,cv=cv,scoring= 'f1')
+print("Scores_FT:", scores.mean())
+
+#Day 55 manual roundness: 0.9826 vs this pipeline: 0.9806. The difference is about 0.002, probably different rows or folds
+
+
+pipeline.fit(X_train,y_train)
+joblib.dump(pipeline,'day58_pipeline.joblib')
+
+loaded = joblib.load('day58_pipeline.joblib')
+
+print("Prediction Identical:", np.array_equal(pipeline.predict(X_test),loaded.predict(X_test)))
+
+# If the roundness was computed outside the pipeline the saved model won't contain that step as the model saved was that of the pipeline, it will be a model trained on 31 features, because roundness was added by hand in my script ,the results might not be obvious  with the current prediction-identical line but the model  crashes later because the hospital sends 30 raw columns but the model expects 31.
+# The identical-predictions line can't catch this, because it compares two copies on the same input.
+# add_roundness must be defined wherever the file is loaded or loading fails
+
+
+wri = list(data.feature_names).index('worst radius')
+
+class DistanceFromTrainMean(BaseEstimator,TransformerMixin):
+    def fit(self,X,y=None):
+        self.train_mean_ = X[:,wri].mean()
+        return self
+    def transform(self,X):
+        return np.column_stack([X,np.abs(X[:,wri]-self.train_mean_)])
+
+
+pipeline_DTM = Pipeline([('features', DistanceFromTrainMean()),
+                     ('scaler', StandardScaler()),
+                     ('model', LogisticRegression(max_iter=1000))
+                     ])
+scores_DTM = cross_val_score(pipeline_DTM,X,y,cv=cv,scoring= 'f1')
+print("Scores_DTM:", scores_DTM.mean())
+
+# The fit learns train_mean_  (mean of the worst radius column (column 20)) solely from the training slice passed to it, and it's leak proof by construction because of the pipeline rule, during cross_val_score, fit() is isolated to training fold indices before transform() is invoked on validation fold indices. The validation rows never influence that mean, which is why no validation information leaks into training
+
+
+global_mean = X[:,wri].mean()
+
+class LeakyDistanceFromTrainMean(BaseEstimator,TransformerMixin):
+    def fit(self,X,y=None):
+        self.train_mean_ = global_mean
+        return self
+    def transform(self,X):
+        return np.column_stack([X,np.abs(X[:,wri]-self.train_mean_)])
+
+
+pipeline_LDTM = Pipeline([('features', LeakyDistanceFromTrainMean()),
+                     ('scaler', StandardScaler()),
+                     ('model', LogisticRegression(max_iter=1000))
+                     ])
+scores_LDTM = cross_val_score(pipeline_LDTM,X,y,cv=cv,scoring= 'f1')
+print("Scores_LDTM:", scores_LDTM.mean())
+
+#Scores_LDTM matches Scores_DTM to every digit, so this metric didn't reveal the leak
+
+# The single requirement that makes the golden rule work is that fit() strictly computes parameters using only the X parameter passed into it at runtime. Who enforces it? YOU, inside the fit() implementation.
+# Pipeline and cross_val_score can only route data slices they can't inspect internal class logic to block global references.
+
+# Stateless features requiring strictly on individual rows attributes (logs square, ratio, transforms) belong to the function or transformer
+# Stateful features requiring statistics number values, parameters derived across multiple rows (e.g mean, std )belongs to the custom class
+
+# Always save the whole fitted pipeline; preprocessing, custom transformers, and trained model included
+ 
+# Item 2 says to fit on training data only, inside a pipeline.
+# Task 3 showed the Pipeline alone isn't enough, because it can't stop my own fit from using global mean instead of the data it was handed.
+# So for any custom transformer, I now add a check: read fit and make sure it only uses the X it receives
+
+#OUTPUTS
+# Scores_FT: 0.9806041577470148
+# Prediction Identical: True
+# Scores_DTM: 0.9794339645403476
+# Scores_LDTM: 0.9794339645403476
+
+
+
+
+
